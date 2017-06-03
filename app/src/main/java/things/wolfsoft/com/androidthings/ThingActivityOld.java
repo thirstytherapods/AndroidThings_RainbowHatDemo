@@ -4,6 +4,9 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.graphics.Color;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -16,6 +19,7 @@ import android.widget.TextView;
 import com.google.android.things.contrib.driver.apa102.Apa102;
 import com.google.android.things.contrib.driver.bmx280.Bmx280SensorDriver;
 import com.google.android.things.contrib.driver.button.Button;
+import com.google.android.things.contrib.driver.button.ButtonInputDriver;
 import com.google.android.things.contrib.driver.ht16k33.AlphanumericDisplay;
 import com.google.android.things.contrib.driver.pwmspeaker.Speaker;
 import com.google.android.things.pio.Gpio;
@@ -28,10 +32,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
-public class ThingActivity extends AppCompatActivity {
+public class ThingActivityOld extends AppCompatActivity {
     private static final String TAG = "ThingActivity";
 
-    private Button buttonA;
+    private ButtonInputDriver buttonAInputDriver;
     private Button buttonB;
     private Button buttonC;
 
@@ -51,12 +55,12 @@ public class ThingActivity extends AppCompatActivity {
     private AlphanumericDisplay alphaDisplay;
     private static final float CLEAR_DISPLAY = 73638.45f;
     private enum DisplayMode {
-        DOOR,
-        IN,
-        OUT,
+        TEMPERATURE,
+        PRESSURE,
         CLEAR
     }
-    private DisplayMode displayMode = DisplayMode.DOOR;
+    private DisplayMode displayMode = DisplayMode.TEMPERATURE;
+    private boolean useFarenheit = true;
 
     private Speaker speaker;
     private int SPEAKER_READY_DELAY_MS = 300;
@@ -66,8 +70,15 @@ public class ThingActivity extends AppCompatActivity {
     private static int SOUND_HIGH = 8;
 
     private Bmx280SensorDriver environmentalSensorDriver;
+    private SensorManager sensorManager;
+    private float lastTemperature;
+    private float lastPressure;
+    private static final float BAROMETER_RANGE_LOW = 965.f;
+    private static final float BAROMETER_RANGE_HIGH = 1035.f;
 
     private TextView titleTxt;
+    private TextView tempTxt;
+    private TextView pressureTxt;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -76,6 +87,8 @@ public class ThingActivity extends AppCompatActivity {
 
         Log.d(TAG, "Hello Android Things!");
         titleTxt = (TextView) findViewById(R.id.text_title);
+        tempTxt = (TextView) findViewById(R.id.text_temperature);
+        pressureTxt = (TextView) findViewById(R.id.text_pressure);
 
         // Set current IP on display (need this to connect ADB)
         String currentIp = getIPAddress(true);
@@ -84,11 +97,18 @@ public class ThingActivity extends AppCompatActivity {
         Log.d(TAG, "Current IP address is: " + currentIp);
 
         // Initialize buttons
+        // Method1 to handle key presses, using Input driver, handle Key DOWN/UP
         try {
-            buttonA = new Button(BoardDefaults.getGPIOForBtnA(),
-                    Button.LogicState.PRESSED_WHEN_LOW);
-            buttonA.setOnButtonEventListener(buttonCallbackA);
+            buttonAInputDriver = new ButtonInputDriver(BoardDefaults.getGPIOForBtnA(),
+                    Button.LogicState.PRESSED_WHEN_LOW, KeyEvent.KEYCODE_A);
+            buttonAInputDriver.register();
+            Log.d(TAG, "Button A registered, will generate KEYCODE_A");
+        } catch (IOException e) {
+            throw new RuntimeException("Error initializing GPIO button A", e);
+        }
 
+        // Another way to register button events, simpler, but handles single press event
+        try {
             buttonB = new Button(BoardDefaults.getGPIOForBtnB(),
                     Button.LogicState.PRESSED_WHEN_LOW);
             buttonB.setOnButtonEventListener(buttonCallbackB);
@@ -143,15 +163,31 @@ public class ThingActivity extends AppCompatActivity {
             throw new RuntimeException("Error initializing PWM speaker", e);
         }
 
+        // I2C Sensors - Temperature and Pressure
+        sensorManager = ((SensorManager) getSystemService(SENSOR_SERVICE));
+        try {
+            environmentalSensorDriver = new Bmx280SensorDriver(BoardDefaults.getI2cBus());
+            sensorManager.registerDynamicSensorCallback(dynamicSensorCallback);
+            environmentalSensorDriver.registerTemperatureSensor();
+            environmentalSensorDriver.registerPressureSensor();
+            Log.d(TAG, "Initialized I2C BMP280");
+        } catch (IOException e) {
+            throw new RuntimeException("Error initializing BMP280", e);
+        }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
 
-        //Buttons
-        if (buttonA != null) {
-            // TODO
+        //Button
+        if (buttonAInputDriver != null) {
+            try {
+                buttonAInputDriver.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            buttonAInputDriver = null;
         }
 
         if (buttonB != null) {
@@ -201,6 +237,11 @@ public class ThingActivity extends AppCompatActivity {
             }
         }
 
+        // Clean up sensor registrations
+        sensorManager.unregisterListener(temperatureListener);
+        sensorManager.unregisterListener(pressureListener);
+        sensorManager.unregisterDynamicSensorCallback(dynamicSensorCallback);
+
         // Clean up peripheral.
         if (environmentalSensorDriver != null) {
             try {
@@ -212,76 +253,49 @@ public class ThingActivity extends AppCompatActivity {
         }
     }
 
-//    @Override
-//    public boolean onKeyDown(int keyCode, KeyEvent event) {
-//        if (keyCode == KeyEvent.KEYCODE_A) {
-//            Log.d(TAG, "The button A event was received KEY DOWN");
-//            displayMode = DisplayMode.DOOR;
-//            int[] colors = new int[NUM_LEDS];
-//            // Switches the rainbow from left to right on each press
-//            if (rainbowOrder) {
-//                rainbowOrder = false;
-//                colors[0] = mRainbow[6];
-//                colors[1] = mRainbow[5];
-//                colors[2] = mRainbow[4];
-//                colors[3] = mRainbow[3];
-//                colors[4] = mRainbow[2];
-//                colors[5] = mRainbow[1];
-//                colors[6] = mRainbow[0];
-//            } else {
-//                rainbowOrder = true;
-//                colors[0] = mRainbow[0];
-//                colors[1] = mRainbow[1];
-//                colors[2] = mRainbow[2];
-//                colors[3] = mRainbow[3];
-//                colors[4] = mRainbow[4];
-//                colors[5] = mRainbow[5];
-//                colors[6] = mRainbow[6];
-//            }
-//            soundSpeaker(SOUND_LOW);
-//            runLedStrip(colors);
-//            showLED(RED_LED);
-//
-//            return true;
-//        }
-//        return super.onKeyUp(keyCode, event);
-//    }
-//
-//    @Override
-//    public boolean onKeyUp(int keyCode, KeyEvent event) {
-//        if (keyCode == KeyEvent.KEYCODE_A) {
-//            Log.d(TAG, "The button A event was received KEY UP");
-//            return true;
-//        }
-//        return super.onKeyUp(keyCode, event);
-//    }
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_A) {
+            Log.d(TAG, "The button A event was received KEY DOWN");
+            displayMode = DisplayMode.TEMPERATURE;
+            int[] colors = new int[NUM_LEDS];
+            // Switches the rainbow from left to right on each press
+            if (rainbowOrder) {
+                rainbowOrder = false;
+                colors[0] = mRainbow[6];
+                colors[1] = mRainbow[5];
+                colors[2] = mRainbow[4];
+                colors[3] = mRainbow[3];
+                colors[4] = mRainbow[2];
+                colors[5] = mRainbow[1];
+                colors[6] = mRainbow[0];
+            } else {
+                rainbowOrder = true;
+                colors[0] = mRainbow[0];
+                colors[1] = mRainbow[1];
+                colors[2] = mRainbow[2];
+                colors[3] = mRainbow[3];
+                colors[4] = mRainbow[4];
+                colors[5] = mRainbow[5];
+                colors[6] = mRainbow[6];
+            }
+            soundSpeaker(SOUND_LOW);
+            runLedStrip(colors);
+            showLED(RED_LED);
 
-    /**
-     * Callback for buttonB events.
-     */
-    private Button.OnButtonEventListener buttonCallbackA =
-            new Button.OnButtonEventListener() {
-                @Override
-                public void onButtonEvent(Button button, boolean pressed) {
-                    if (pressed) {
-                        displayMode = DisplayMode.DOOR;
-                        Log.d(TAG, "button B pressed");
-                        Random rand = new Random();
-                        int[] colors = new int[NUM_LEDS];
-                        colors[0] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[1] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[2] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[3] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[4] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[5] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[6] = mRainbow[rand.nextInt(NUM_LEDS)];
+            return true;
+        }
+        return super.onKeyUp(keyCode, event);
+    }
 
-                        soundSpeaker(SOUND_MED);
-                        runLedStrip(colors);
-                        showLED(GREEN_LED);
-                    }
-                }
-            };
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_A) {
+            Log.d(TAG, "The button A event was received KEY UP");
+            return true;
+        }
+        return super.onKeyUp(keyCode, event);
+    }
 
     /**
      * Callback for buttonB events.
@@ -291,7 +305,7 @@ public class ThingActivity extends AppCompatActivity {
                 @Override
                 public void onButtonEvent(Button button, boolean pressed) {
                     if (pressed) {
-                        displayMode = DisplayMode.OUT;
+                        displayMode = DisplayMode.PRESSURE;
                         Log.d(TAG, "button B pressed");
                         Random rand = new Random();
                         int[] colors = new int[NUM_LEDS];
@@ -416,12 +430,14 @@ public class ThingActivity extends AppCompatActivity {
     private void updateDisplay(float value) {
         if (alphaDisplay != null) {
             try {
-                if (displayMode == DisplayMode.DOOR) {
-                    alphaDisplay.display("DOOR");
-                } else if(displayMode == DisplayMode.IN) {
-                    alphaDisplay.display("IN");
-                } else if(displayMode == DisplayMode.OUT) {
-                    alphaDisplay.display("OUT");
+                if (displayMode == DisplayMode.PRESSURE) {
+                    if (value > BAROMETER_RANGE_HIGH) {
+                        alphaDisplay.display("HIGH");
+                    } else if (value < BAROMETER_RANGE_LOW) {
+                        alphaDisplay.display("LOW");
+                    } else {
+                        alphaDisplay.display("MED");
+                    }
                 } else if (displayMode == DisplayMode.CLEAR) {
                     alphaDisplay.clear();
                 } else {
@@ -432,6 +448,72 @@ public class ThingActivity extends AppCompatActivity {
             }
         }
     }
+
+    // Callback used when we register the BMP280 sensor driver with the system's SensorManager.
+    private SensorManager.DynamicSensorCallback dynamicSensorCallback
+            = new SensorManager.DynamicSensorCallback() {
+        @Override
+        public void onDynamicSensorConnected(Sensor sensor) {
+            if (sensor.getType() == Sensor.TYPE_AMBIENT_TEMPERATURE) {
+                Log.d(TAG, "Ambient temp sensor connected and is receiving temperature data");
+                sensorManager.registerListener(temperatureListener, sensor,
+                        SensorManager.SENSOR_DELAY_NORMAL);
+
+
+            } else if (sensor.getType() == Sensor.TYPE_PRESSURE) {
+                Log.d(TAG, "Pressure sensor connected and is receiving temperature data");
+                sensorManager.registerListener(pressureListener, sensor,
+                        SensorManager.SENSOR_DELAY_NORMAL);
+            }
+        }
+
+        @Override
+        public void onDynamicSensorDisconnected(Sensor sensor) {
+            super.onDynamicSensorDisconnected(sensor);
+        }
+    };
+
+    // Callback when SensorManager delivers temperature data.
+    private SensorEventListener temperatureListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            lastTemperature = event.values[0];
+            if (useFarenheit) {
+                tempTxt.setText("Current Temperature in Farenheit (time reported):\n    " + Utilities.convertCelciusToFahrenheit(lastTemperature) + "\n    " +  Utilities.getDate());
+            } else {
+                tempTxt.setText("Current Temperature in Celcius (time reported):\n    " + lastTemperature + "\n    " + Utilities.getDate());
+            }
+
+
+            if (displayMode == DisplayMode.TEMPERATURE) {
+                updateDisplay(Utilities.convertCelciusToFahrenheit(lastTemperature));
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+            Log.d(TAG, "Temp accuracy changed: " + accuracy);
+        }
+    };
+
+    // Callback when SensorManager delivers pressure data.
+    private SensorEventListener pressureListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            lastPressure = event.values[0];
+            pressureTxt.setText("Barometric Pressure in hectoPascals (time reported):\n    " + lastPressure/100 + "\n    " + Utilities
+                    .getDate());
+            if (displayMode == DisplayMode.PRESSURE) {
+
+                updateDisplay(lastPressure);
+            }
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+            Log.d(TAG, "Pressure accuracy changed: " + accuracy);
+        }
+    };
 
     /**
      * A utility method to return current IP
