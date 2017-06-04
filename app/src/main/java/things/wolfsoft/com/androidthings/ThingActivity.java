@@ -4,26 +4,36 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.graphics.Color;
-import android.hardware.SensorManager;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.view.animation.LinearInterpolator;
 import android.widget.TextView;
 
 import com.google.android.things.contrib.driver.apa102.Apa102;
-import com.google.android.things.contrib.driver.bmx280.Bmx280SensorDriver;
 import com.google.android.things.contrib.driver.button.Button;
 import com.google.android.things.contrib.driver.ht16k33.AlphanumericDisplay;
 import com.google.android.things.contrib.driver.pwmspeaker.Speaker;
 import com.google.android.things.pio.Gpio;
 import com.google.android.things.pio.PeripheralManagerService;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.StringHttpMessageConverter;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
+import org.springframework.web.client.RestTemplate;
+
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
@@ -65,9 +75,9 @@ public class ThingActivity extends AppCompatActivity {
     private static int SOUND_MED = 4;
     private static int SOUND_HIGH = 8;
 
-    private Bmx280SensorDriver environmentalSensorDriver;
-
     private TextView titleTxt;
+
+    private AppTextToSpeech appTextToSpeech;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -82,6 +92,8 @@ public class ThingActivity extends AppCompatActivity {
 
         titleTxt.setText("Current IP (time started):\n    " + currentIp + "\n    " + Utilities.getDate());
         Log.d(TAG, "Current IP address is: " + currentIp);
+
+        appTextToSpeech = new AppTextToSpeech(this);
 
         // Initialize buttons
         try {
@@ -158,6 +170,10 @@ public class ThingActivity extends AppCompatActivity {
             // TODO
         }
 
+        if (buttonC != null) {
+            // TODO
+        }
+
         // GPIO LEDS
         try {
             ledGpioRed.setDirection(Gpio.DIRECTION_OUT_INITIALLY_LOW);
@@ -201,84 +217,79 @@ public class ThingActivity extends AppCompatActivity {
             }
         }
 
-        // Clean up peripheral.
-        if (environmentalSensorDriver != null) {
-            try {
-                environmentalSensorDriver.close();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-            environmentalSensorDriver = null;
-        }
     }
 
-//    @Override
-//    public boolean onKeyDown(int keyCode, KeyEvent event) {
-//        if (keyCode == KeyEvent.KEYCODE_A) {
-//            Log.d(TAG, "The button A event was received KEY DOWN");
-//            displayMode = DisplayMode.DOOR;
-//            int[] colors = new int[NUM_LEDS];
-//            // Switches the rainbow from left to right on each press
-//            if (rainbowOrder) {
-//                rainbowOrder = false;
-//                colors[0] = mRainbow[6];
-//                colors[1] = mRainbow[5];
-//                colors[2] = mRainbow[4];
-//                colors[3] = mRainbow[3];
-//                colors[4] = mRainbow[2];
-//                colors[5] = mRainbow[1];
-//                colors[6] = mRainbow[0];
-//            } else {
-//                rainbowOrder = true;
-//                colors[0] = mRainbow[0];
-//                colors[1] = mRainbow[1];
-//                colors[2] = mRainbow[2];
-//                colors[3] = mRainbow[3];
-//                colors[4] = mRainbow[4];
-//                colors[5] = mRainbow[5];
-//                colors[6] = mRainbow[6];
-//            }
-//            soundSpeaker(SOUND_LOW);
-//            runLedStrip(colors);
-//            showLED(RED_LED);
-//
-//            return true;
-//        }
-//        return super.onKeyUp(keyCode, event);
-//    }
-//
-//    @Override
-//    public boolean onKeyUp(int keyCode, KeyEvent event) {
-//        if (keyCode == KeyEvent.KEYCODE_A) {
-//            Log.d(TAG, "The button A event was received KEY UP");
-//            return true;
-//        }
-//        return super.onKeyUp(keyCode, event);
-//    }
-
     /**
-     * Callback for buttonB events.
+     * Callback for buttonA events.
      */
     private Button.OnButtonEventListener buttonCallbackA =
             new Button.OnButtonEventListener() {
                 @Override
                 public void onButtonEvent(Button button, boolean pressed) {
                     if (pressed) {
+                        Log.d(TAG, "The button A event was received KEY DOWN");
                         displayMode = DisplayMode.DOOR;
-                        Log.d(TAG, "button B pressed");
-                        Random rand = new Random();
+                        updateDisplay(CLEAR_DISPLAY);
                         int[] colors = new int[NUM_LEDS];
-                        colors[0] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[1] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[2] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[3] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[4] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[5] = mRainbow[rand.nextInt(NUM_LEDS)];
-                        colors[6] = mRainbow[rand.nextInt(NUM_LEDS)];
-
-                        soundSpeaker(SOUND_MED);
+                        // Switches the rainbow from left to right on each press
+                        if (rainbowOrder) {
+                            rainbowOrder = false;
+                            colors[0] = mRainbow[6];
+                            colors[1] = mRainbow[5];
+                            colors[2] = mRainbow[4];
+                            colors[3] = mRainbow[3];
+                            colors[4] = mRainbow[2];
+                            colors[5] = mRainbow[1];
+                            colors[6] = mRainbow[0];
+                        } else {
+                            rainbowOrder = true;
+                            colors[0] = mRainbow[0];
+                            colors[1] = mRainbow[1];
+                            colors[2] = mRainbow[2];
+                            colors[3] = mRainbow[3];
+                            colors[4] = mRainbow[4];
+                            colors[5] = mRainbow[5];
+                            colors[6] = mRainbow[6];
+                        }
+                        //soundSpeaker(SOUND_LOW);
                         runLedStrip(colors);
-                        showLED(GREEN_LED);
+                        showLED(RED_LED);
+
+                        new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                //appTextToSpeech.say("DOOR");
+                            }
+                        }).start();
+
+                        int randIndex = randInt(0, 5);
+                        try {
+                            JSONObject requests = new JSONObject();
+
+                            JSONArray arrRequest = new JSONArray();
+                            JSONObject image = new JSONObject();
+                            JSONObject source = new JSONObject();
+                            JSONObject imageUri = new JSONObject();
+                            imageUri.put("imageUri", Constants.IMAGES[randIndex]);
+                            source.put("source", imageUri);
+                            image.put("image", source);
+                            JSONArray arrFeatures = new JSONArray();
+                            JSONObject feature = new JSONObject();
+                            feature.put("type", "WEB_DETECTION");
+                            feature.put("maxResults", 2);
+                            arrFeatures.put(0, feature);
+                            //JSONObject features = new JSONObject();
+                            image.put("features", arrFeatures);
+                            //image.put("features", features);
+
+
+                            arrRequest.put(0, image);
+                            requests.put("requests", arrRequest);
+
+                            new UploadFileTask().execute(requests.toString());
+                        } catch (JSONException e) {
+                            e.printStackTrace();
+                        }
                     }
                 }
             };
@@ -291,7 +302,13 @@ public class ThingActivity extends AppCompatActivity {
                 @Override
                 public void onButtonEvent(Button button, boolean pressed) {
                     if (pressed) {
-                        displayMode = DisplayMode.OUT;
+                        if(displayMode == DisplayMode.OUT) {
+                            displayMode = DisplayMode.IN;
+                        } else {
+                            displayMode = DisplayMode.OUT;
+                        }
+
+                        updateDisplay(CLEAR_DISPLAY);
                         Log.d(TAG, "button B pressed");
                         Random rand = new Random();
                         int[] colors = new int[NUM_LEDS];
@@ -306,6 +323,13 @@ public class ThingActivity extends AppCompatActivity {
                         soundSpeaker(SOUND_MED);
                         runLedStrip(colors);
                         showLED(GREEN_LED);
+
+                        new Thread(new Runnable() {
+                            @Override
+                            public void run() {
+                                appTextToSpeech.say(displayMode.name());
+                            }
+                        }).start();
                     }
                 }
             };
@@ -467,5 +491,73 @@ public class ThingActivity extends AppCompatActivity {
         return "NO IP ADDRESS FOUND";
     }
 
+    private int randInt(int min, int max) {
 
+        Random rand = new Random();
+
+        int randomNum = rand.nextInt((max - min) + 1) + min;
+
+        return randomNum;
+    }
+
+    private class UploadFileTask extends AsyncTask<String, Integer, String> {
+
+        private long totalSize = 0;
+
+        @Override
+        protected String doInBackground(String... payload) {
+            Log.d(TAG, payload[0]);
+            String responseString = null;
+
+            RestTemplate restTemplate = new RestTemplate();
+            restTemplate.getMessageConverters().add(new MappingJackson2HttpMessageConverter());
+            restTemplate.getMessageConverters().add(new StringHttpMessageConverter());
+
+            List<MediaType> acceptableMediaTypes = new ArrayList<>();
+            acceptableMediaTypes.add(MediaType.APPLICATION_JSON);
+
+            // Prepare header
+            HttpHeaders headers = new HttpHeaders();
+            headers.setAccept(acceptableMediaTypes);
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("Connection", "Close");
+            // Pass the new person and header
+            HttpEntity entity = new HttpEntity(payload[0], headers);
+
+            responseString = restTemplate.exchange(Constants.GOOGLE_VISION_URL + "?" +
+                            Constants.PARAM_KEY + "=" + Constants.GOOGLE_VISION_API_KEY,
+                    HttpMethod.POST, entity, String.class).getBody();
+
+            Log.d(TAG, responseString);
+
+            return responseString;
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+            if(result != null && !"".equals(result)) {
+                try {
+                    JSONObject response = new JSONObject(result);
+                    JSONArray responses = response.getJSONArray("responses");
+                    JSONObject webDetection = responses.getJSONObject(0).getJSONObject("webDetection");
+                    JSONArray webEntities = webDetection.getJSONArray("webEntities");
+
+                    for(int i = 0; i < webEntities.length(); i++) {
+                        JSONObject webEntity = webEntities.getJSONObject(i);
+                        if(webEntity.getString("description").contains("Anger") &&
+                                webEntity.getDouble("score") > 0.5) {
+                            displayMode = DisplayMode.OUT;
+                            updateDisplay(CLEAR_DISPLAY);
+                        } else {
+                            displayMode = DisplayMode.IN;
+                            updateDisplay(CLEAR_DISPLAY);
+                        }
+                    }
+
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
 }
